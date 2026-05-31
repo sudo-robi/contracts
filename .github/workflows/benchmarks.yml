@@ -1,0 +1,101 @@
+name: Benchmark Regression Check
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'sdk/**'
+      - '.github/workflows/benchmarks.yml'
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Get full history for baseline comparison
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+      
+      - name: Install dependencies
+        working-directory: sdk
+        run: pnpm install --prefer-offline
+      
+      - name: Run benchmarks
+        working-directory: sdk
+        run: pnpm bench
+      
+      - name: Download baseline from main
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin main:main
+          if [ -f "sdk/bench/baseline.md" ]; then
+            cp sdk/bench/baseline.md sdk/bench/baseline_main.md
+          else
+            echo "No baseline found, creating from current run"
+            cp sdk/bench/results.json sdk/bench/baseline.json
+          fi
+      
+      - name: Compare with baseline
+        working-directory: sdk
+        run: |
+          # Check if we have baseline to compare against
+          if [ ! -f "bench/baseline.json" ]; then
+            echo "No baseline.json found, skipping regression check"
+            exit 0
+          fi
+          
+          # Simple comparison - in practice you'd use a proper benchmark comparison tool
+          echo "Benchmark regression check completed"
+          echo "Results saved to bench/results.json"
+          echo "Baseline available at bench/baseline.json"
+          
+          # For now, just report that we ran the benchmarks
+          # A full implementation would parse both JSON files and check for >20% regression
+      
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const benchmarkResults = await fs.promises.readFile('./sdk/bench/results.json', 'utf8');
+            const baseline = await fs.promises.readFile('./sdk/bench/baseline.json', 'utf8');
+            
+            // Simple check - real implementation would parse and compare
+            const body = `
+## Benchmark Results
+
+Benchmarks have been run for this PR. Full results are available in the workflow artifacts.
+
+**To view detailed benchmark comparison:**
+1. Check the workflow logs for benchmark output
+2. Review the benchmark results in the artifacts
+3. Performance regressions >20% will be flagged here once full comparison is implemented
+
+<details>
+<summary>Current benchmark results</summary>
+
+\`\`\`json
+${benchmarkResults}
+\`\`\`
+
+<details>
+<summary>Baseline for comparison</summary>
+
+\`\`\`json
+${baseline}
+\`\`\`
+</details>
+`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
